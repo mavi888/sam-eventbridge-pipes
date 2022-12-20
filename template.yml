@@ -155,7 +155,7 @@ Resources:
               - Effect: Allow
                 Action:
                   - states:StartSyncExecution
-                Resource: !Ref EnrichStateMachineARN
+                Resource: !GetAtt EnrichStateMachineARN.Arn
 
   # EventBridge Pipe
   Pipe:

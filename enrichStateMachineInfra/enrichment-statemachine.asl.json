@@ -1,0 +1,62 @@
+{
+	"Comment": "A description of my state machine",
+	"StartAt": "Map",
+	"States": {
+		"Map": {
+			"Type": "Map",
+			"ItemProcessor": {
+				"ProcessorConfig": {
+					"Mode": "INLINE"
+				},
+				"StartAt": "Choice",
+				"States": {
+					"Choice": {
+						"Type": "Choice",
+						"Choices": [
+							{
+								"Variable": "$.data.deviceType",
+								"StringEquals": "android",
+								"Next": "GetUserInfo"
+							}
+						],
+						"Default": "Success"
+					},
+					"GetUserInfo": {
+						"Type": "Task",
+						"Resource": "arn:aws:states:::dynamodb:getItem",
+						"Parameters": {
+							"TableName": "${userInfoTable}",
+							"Key": {
+								"deviceId": {
+									"S.$": "$.data.deviceId"
+								}
+							}
+						},
+						"ResultSelector": {
+							"userId.$": "$.Item.userId.S"
+						},
+						"ResultPath": "$.data.userId",
+
+						"Next": "CleanOutput"
+					},
+					"CleanOutput": {
+						"Type": "Pass",
+						"Next": "Success",
+						"Parameters": {
+							"type.$": "$.data.type",
+							"deviceType.$": "$.data.deviceType",
+							"deviceId.$": "$.data.deviceId",
+							"userId.$": "$.data.userId.userId"
+						},
+						"ResultPath": "$.data"
+					},
+					"Success": {
+						"Type": "Succeed"
+					}
+				}
+			},
+			"End": true,
+			"ItemsPath": "$"
+		}
+	}
+}

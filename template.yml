@@ -1,0 +1,182 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Template to connect DynamoDB Stream to EventBridge
+
+Parameters:
+  EnrichStateMachineARN:
+    Type: String
+
+Resources:
+  # Define an AWS Kinesis Data Stream
+  KinesisStream:
+    Type: AWS::Kinesis::Stream
+    Properties:
+      Name:
+        !Join [
+          '',
+          [!Ref 'AWS::AccountId', '-', !Ref 'AWS::Region', '-pipes-stream'],
+        ]
+      StreamModeDetails:
+        StreamMode: ON_DEMAND
+
+  # Event Bus (Target)
+  CustomEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name:
+        !Join [
+          '',
+          [!Ref 'AWS::AccountId', '-', !Ref 'AWS::Region', '-pipes-custom-bus'],
+        ]
+
+  TestingLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        !Join [
+          '',
+          [!Ref 'AWS::AccountId', '-', !Ref 'AWS::Region', '-pipes-loggroup'],
+        ]
+
+  EventBusRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - 'events.amazonaws.com'
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: PutMessageCWL
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:PutLogEvents
+                  - logs:CreateLogStream
+                Resource: !GetAtt TestingLogGroup.Arn
+
+  LogGroupForEventsPolicy:
+    Type: AWS::Logs::ResourcePolicy
+    Properties:
+      PolicyName: EventBridgeToCWLogsPolicy
+      PolicyDocument: !Sub >
+        {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "EventBridgetoCWLogsCreateLogStreamPolicy",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "events.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "logs:CreateLogStream"
+              ],
+              "Resource": [
+                "${TestingLogGroup.Arn}"
+              ]
+            },
+            {
+              "Sid": "EventBridgetoCWLogsPutLogEventsPolicy",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "events.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "logs:PutLogEvents"
+              ],
+              "Resource": [
+                "${TestingLogGroup.Arn}"
+              ],
+              "Condition": {
+                "ArnEquals": {"AWS:SourceArn": "${MyEventsRule.Arn}"}
+              }
+            }
+          ]
+        }
+
+  MyEventsRule:
+    Type: 'AWS::Events::Rule'
+    Properties:
+      Description: 'EventBridge to CloudWatch log group'
+      EventBusName: !Ref CustomEventBus
+      EventPattern:
+        source:
+          - prefix: '' # To match all events
+      Targets:
+        - Arn: !GetAtt TestingLogGroup.Arn
+          Id: 'ruleCloudwatch'
+
+  # DLQ for Stream (Source)
+  PipeDLQueue:
+    Type: AWS::SQS::Queue
+
+  PipeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - pipes.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Policies:
+        - PolicyName: SourcePolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - kinesis:DescribeStream
+                  - kinesis:DescribeStreamSummary
+                  - kinesis:GetRecords
+                  - kinesis:GetShardIterator
+                Resource: !GetAtt KinesisStream.Arn
+        - PolicyName: TargetPolicy
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource: !GetAtt CustomEventBus.Arn
+        - PolicyName: StartEnrichment
+          PolicyDocument:
+            Statement:
+              - Effect: Allow
+                Action:
+                  - states:StartSyncExecution
+                Resource: !Ref EnrichStateMachineARN
+
+  # EventBridge Pipe
+  Pipe:
+    Type: AWS::Pipes::Pipe
+    Properties:
+      Name: kinesis-to-eventbridge
+      Description: 'Pipe to connect Kinesis stream to EventBridge event bus'
+      RoleArn: !GetAtt PipeRole.Arn
+      Source: !GetAtt KinesisStream.Arn
+      SourceParameters:
+        FilterCriteria:
+          Filters:
+            - Pattern: '{"data":{"type":["FILTER"]}}'
+        KinesisStreamParameters:
+          StartingPosition: LATEST
+          BatchSize: 1
+          DeadLetterConfig:
+            Arn: !GetAtt PipeDLQueue.Arn
+      Target: !GetAtt CustomEventBus.Arn
+      Enrichment: !Ref EnrichStateMachineARN
+      EnrichmentParameters:
+        InputTemplate: '{ "data": <$.data> }'
+  # TODO WORK ON ENRICHMENT -- MAKING ALL THE DATES ALIGN FOR EXAMPLE
+  ## TODO WORK ON TRASNFORM THE ATTRIBUTES?

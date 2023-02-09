@@ -178,5 +178,3 @@ Resources:
       Enrichment: !Ref EnrichStateMachineARN
       EnrichmentParameters:
         InputTemplate: '{ "data": <$.data> }'
-  # TODO WORK ON ENRICHMENT -- MAKING ALL THE DATES ALIGN FOR EXAMPLE
-  ## TODO WORK ON TRASNFORM THE ATTRIBUTES?
